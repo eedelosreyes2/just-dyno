@@ -1,0 +1,15 @@
+{
+  // Stricter than the app config: no DOM or React Native globals, so the sim
+  // can run unchanged on a server. Check with `npm run typecheck`.
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": [],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"]
+}

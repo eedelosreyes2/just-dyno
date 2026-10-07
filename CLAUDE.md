@@ -34,6 +34,12 @@ This is a personal project I'm building to have fun, learn, sharpen my engineeri
 - Point out the single most important thing in the diff I should understand, and any edge cases or weaknesses you know about.
 - Suggest one small piece of the next step that I could write by hand for practice, ideally something in the part of the stack that's new to me.
 
+## Git
+
+- Commit and push directly to `main`; no feature branches for this solo project.
+- Only commit or push when I ask.
+- Keep one concern per commit where practical (e.g. code and docs separately).
+
 ## Hand-written code
 
 - When I write code myself, review it like a senior engineer: correctness, edge cases, naming, and how it would hold up at scale.

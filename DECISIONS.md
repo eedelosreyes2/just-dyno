@@ -75,3 +75,21 @@ Append a new entry at the bottom for each meaningful design decision. Format and
   - Debugging: traced the error to an unguarded top-level call in the library's source, not our code
   - Tradeoff: took the supported path (two extra deps, already in Expo Go) over patching a third-party library
   - Revisit if: Skia fixes the guard upstream and we still don't use Reanimated
+
+## 2026-10-03 — Animated drawing: rAF loop on the JS thread writes to a shared value; Skia redraws from it
+- **Alternatives:** `requestAnimationFrame` + `setState` every frame; Skia's `useFrameCallback` worklet on the UI thread.
+- **Why:** `setState` per frame re-renders React ~60 times a second, which is the thing CLAUDE.md rules out. Worklets would make the open loop-thread decision early and force sensor data across threads. Writing an `SkPath` into a Reanimated shared value lets Skia redraw without a React render while all logic stays plain JS on the JS thread. React state is only used for text readouts, throttled to 4 Hz. First used by the sensor debug screen; step 3's sim loop will follow the same pattern.
+- **Interview:**
+  - Problem: draw 60 fps animation in React Native without React re-rendering every frame
+  - Tradeoff: game loop stays plain JS on the JS thread; React only owns layout and slow-changing text
+  - Data path: sensor events → preallocated ring buffer → rAF reads it → shared value → Skia redraws
+  - Revisit if: the JS thread janks under load; then move the loop to UI-thread worklets
+
+## 2026-10-06 — Up and down is the main pump; both phone axes feed the pivot
+- **Alternatives:** Vertical only, with every swing started for the player (catch momentum, angled start); sideways as the main pump with vertical as a later bonus.
+- **Why:** Vertical matches a real dyno (sag and pull) and is how I want the game to feel. But vertical pivot motion is parametric pumping: it amplifies an existing swing at twice the swing frequency and can't start one from rest, so vertical-only would feel dead after any stop. Feeding the phone's full 2D acceleration into the pivot is the yo-yo model taken literally, costs one line in the step, and lets natural sideways wobble start the swing. Separate gains per axis let vertical be the strong one.
+- **Interview:**
+  - Problem: the motion I wanted as the core input physically can't start a swing from rest
+  - Approach: model the phone as a 2D moving pivot, so one physics step handles both axes with no modes or special cases
+  - Tradeoff: two gains to tune and a less obvious rhythm (twice per swing), in exchange for a mechanic that matches real climbing
+  - Revisit if: playtesters can't find the vertical rhythm without explanation

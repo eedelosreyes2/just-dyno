@@ -1,0 +1,7 @@
+{
+  // Tests run under Node (node:test), so they get Node's types; sim code itself doesn't.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["**/*.ts"],
+  "exclude": []
+}

@@ -1,6 +1,9 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
-  }
+    "strict": true,
+    "allowImportingTsExtensions": true
+  },
+  // Sim tests run under Node and are type-checked by sim/tsconfig.test.json instead.
+  "exclude": ["node_modules", "sim/**/*.test.ts"]
 }

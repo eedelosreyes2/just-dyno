@@ -17,7 +17,7 @@ const GRAPH_HEIGHT = 320;
 const GRIDLINES = [-5, -2, 2, 5]; // m/s²
 const STATS_INTERVAL_MS = 250;
 const X_COLOR = '#3d7be8'; // sideways
-const Y_COLOR = '#e8a33d'; // up and down
+const Y_COLOR = '#e8a33d'; // up in the room (any phone orientation)
 
 type Axis = 'x' | 'y';
 type Range = { min: number; max: number };
@@ -84,7 +84,7 @@ export function SensorDebugScreen() {
       <Text style={styles.legend}>
         <Text style={{ color: X_COLOR }}>■ sideways (x)</Text>
         {'   '}
-        <Text style={{ color: Y_COLOR }}>■ up/down (y)</Text>
+        <Text style={{ color: Y_COLOR }}>■ up in the room</Text>
         {`\nGrid: 0, ±2 (grey), ±5 (red) m/s² · last ${WINDOW_S} s`}
       </Text>
       <View style={styles.readouts}>
@@ -94,7 +94,7 @@ export function SensorDebugScreen() {
           <>
             <Text style={styles.readout}>Rate: {stats ? stats.hz.toFixed(1) : '–'} Hz</Text>
             <Text style={styles.readout}>Sideways min / max: {formatRange(stats?.x)} m/s²</Text>
-            <Text style={styles.readout}>Up/down min / max: {formatRange(stats?.y)} m/s²</Text>
+            <Text style={styles.readout}>World-up min / max: {formatRange(stats?.y)} m/s²</Text>
             <Text style={styles.readout}>Null samples: {stats ? stats.nulls : '–'}</Text>
           </>
         )}
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-    paddingTop: 80,
+    paddingTop: 8,
   },
   title: {
     fontSize: 18,

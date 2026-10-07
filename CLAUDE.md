@@ -1,6 +1,6 @@
 # Just Dyno
 
-A 2D mobile climbing game for iOS and Android. The player presses and holds to hang from a hold, physically pumps the phone (mainly up and down) to build a swing, and releases at the right moment to dyno to the next hold. Side project, about 3 hours on weekends, no hard deadline — more of a lifestyle business vibe.
+A 2D mobile climbing game for iOS and Android. The player presses and holds to stay on the wall (hands on a hold, feet on footholds), physically pumps the phone up and down to bounce like a real dyno, and releases at the top of the drive to jump to the next hold. Side project, about 3 hours on weekends, no hard deadline — more of a lifestyle business vibe.
 
 Full plan and roadmap: https://claude.ai/code/artifact/d0df37d9-6ead-42f2-8bc0-2121e4731411
 
@@ -60,11 +60,11 @@ When we make a meaningful design decision, append an entry to `DECISIONS.md`:
 
 - React Native with Expo, TypeScript.
 - Rendering: `@shopify/react-native-skia`. Never render game objects as React components; the game loop stays outside React's render cycle.
-- Sensors: `expo-sensors` `DeviceMotion`, using `acceleration` (gravity removed), not the raw accelerometer.
+- Sensors: `expo-sensors` `DeviceMotion`, using `acceleration` (gravity removed), not the raw accelerometer. iOS reports the negative of the device's acceleration and Android doesn't; `src/sensors/phoneAccel.ts` normalizes so positive = phone accelerating right / up. Read sensors only through that module.
 - Game loop: start on the JS thread with `requestAnimationFrame`. Move to Reanimated worklets only if it janks.
 - Haptics: `expo-haptics`.
 - Expo Go for now; a development build later (needed for in-app purchases).
-- Project layout: a single Expo app with a top-level `sim/` folder. `eslint.config.js` and `sim/tsconfig.json` enforce the simulation rules below. Run `npm run lint` and `npm run typecheck` before calling a task done.
+- Project layout: a single Expo app with a top-level `sim/` folder. `eslint.config.js` and `sim/tsconfig.json` enforce the simulation rules below. Run `npm run lint`, `npm run typecheck` and `npm test` before calling a task done. Sim tests live next to the code (`sim/*.test.ts`) and run on Node directly.
 
 ## Simulation rules
 
@@ -79,54 +79,58 @@ The simulation will later run on the server to replay and validate scores, so it
 
 ## Core mechanic
 
-Moving-pivot pendulum: the hold is the pivot, and the phone's acceleration in both axes pushes the climber the opposite way, like a yo-yo hanging from a hand. Tune arm length and gravity so one full swing takes about 1.2–1.6 seconds.
+A real dyno, seen from the front: hands on a hold, feet on footholds. The climber sags into a squat, drives up with the legs, and lets go at the top of the drive to fly to the next hold. **Phone down → the climber squats; phone up → he rises, and leaves the footholds if moving fast enough. Tilt the phone left/right → he leans that way and holds the lean.**
 
-- **Up and down is the main pump.** Moving the pivot vertically changes the effective gravity, which amplifies an existing swing (parametric pumping, like standing and squatting on a playground swing). The rhythm is twice per swing: pull as the climber passes the bottom. It cannot start a swing from rest and has no left/right bias.
-- **Sideways starts and nudges the swing.** It pushes the climber directly, once per swing, so any natural wobble gets a swing going.
-- Separate gains per axis; tune vertical to be the strong one. Pumping in rhythm grows the swing; out of rhythm shrinks it.
+- **Sideways = tilt:** the input is gravity along the phone's x axis (`accelerationIncludingGravity.x − acceleration.x` = 9.81 × sin(tilt), + when the right edge is down). Absolute, so no drift, rebound or fade, and no trig in the sim: target lean = (tilt input / gravity) × `leanX`.
+- **Vertical = up in the room, not along the phone:** the sensor module projects the phone's 3-axis acceleration onto the direction opposite gravity (`sim/worldUp.ts`), so rotating moves like a pan flip count, whatever the grip.
+- **Vertical movement estimate:** the sensor only gives acceleration. `sim/phoneMotion.ts` integrates vertical acceleration twice into an estimated phone displacement with a **leaky integrator**: each estimate decays toward zero over `leakTime` (~0.4 s), so quick swings come through and drift or a phone held still fades to neutral. Consequence: a squat can't be held; it fades back in about half a second.
+- **Settling after a swing:** once the phone has been still for ~80 ms, the estimate drops its leftover velocity and returns to neutral over `settleTime` (0.25 s), and the legs damp harder (`settleDamp`), so the climber settles instead of wobbling. During a swing nothing changes. (A version that changed in-swing behavior too measured better headlessly but felt much worse on device; see DECISIONS.md.)
+- **Body:** one point mass at the hips, Verlet-integrated, in meters and seconds.
+- **Legs act only through the feet:** a passive spring holds the body's weight, an active pull (`followK`) moves the hips toward the target (x from tilt; y = rest + `followY × phone displacement`), and damping absorbs motion. Legs push and can't pull: once they straighten, the feet leave and flight is undamped. A fast upward swing carries the hips past full extension (liftoff); a slow one doesn't.
+- **Arms are a rope** to the hand hold: they stop the body sagging below a straight-arm hang and can only pull, never push.
+- **Release** (lift the finger, step 4): the hands let go; if the hips are flying upward, the climber reaches for the next hold. Catch it if the hands come within reach.
+- **Drawing:** a stick figure with adult proportions, posed from the hip point. Limbs are cosmetic, not simulated.
 
 ```ts
 const DT = 1 / 120;
-// Screen coordinates: x right, y down. Phone axes (portrait): x right, y up.
-function step(s: Body, phoneAx: number, phoneAy: number) {
-  const ax = -phoneAx * GAIN_X; // phone moves right → climber pushed left
-  const ay = GRAVITY + phoneAy * GAIN_Y; // phone moves up → climber feels heavier (pushed down)
-  const nx = s.x + (s.x - s.px) * DAMP + ax * DT * DT;
-  const ny = s.y + (s.y - s.py) * DAMP + ay * DT * DT;
-  const dx = nx - hold.x,
-    dy = ny - hold.y;
-  const d = Math.sqrt(dx * dx + dy * dy);
-  s.px = s.x;
-  s.py = s.y;
-  s.x = hold.x + (dx * ARM) / d;
-  s.y = hold.y + (dy * ARM) / d;
+// Front view. x right, y down, meters. Inputs are quantized m/s²: tilt (gravity on phone x) and vertical accel.
+function step(c: Climber, p: Params, inTilt: number, inY: number, holding: boolean) {
+  updatePhoneMotion(c.phone, inY, p.leakTime, p.settleTime); // leaky double integration → c.phone.dy
+  let ax = 0;
+  let ay = p.gravity;
+  if (feetPlanted(c.body, p)) {
+    const targetX = (dequantize(inTilt) / p.gravity) * p.leanX; // tilt right → lean right
+    const targetY = restY(p) - c.phone.dy * p.followY; // phone up → hips up
+    ay -= p.legK * (p.legRest - (FOOT_Y - c.body.y)); // passive spring holds the weight
+    ax += p.followK * (targetX - c.body.x);
+    ay += p.followK * (targetY - c.body.y);
+  }
+  // Verlet step (damped only while planted; settleDamp once the phone is still), then the pull-only rope if holding.
 }
-// Release: velocity = (x - px) / DT, then projectile flight until a hold is in reach.
 ```
 
-Motion is the main input. Touch is an unranked assist mode: dragging a finger in rhythm feeds the same pivot acceleration (both axes) into the same physics.
+Motion is the main input. Touch is an unranked assist mode: dragging a finger moves the same target directly (no integration needed), through the same physics.
 
-Sensitivity should reward timing over size: a light band-pass filter around the swing rhythm, a compressed response curve with a cap, a soft deadzone, and strong feedback (haptic tick per good pump). Raising gain alone amplifies tremor and bumps.
+Sensitivity should reward deliberate swings over size: the leaky integrator already ignores slow drift. Still to come (step 3b): a soft deadzone for hand tremor, a compressed response curve with a cap, and strong feedback (haptic tick on liftoff). Raising follow gain alone amplifies tremor and bumps.
 
 ## Current phase: weekend 1 prototype
 
-One question: does pumping the phone to swing, then releasing, feel good? Success means reaching the next hold in 3–5 pumps and feeling that your movement caused it.
+One question: does swinging the phone down and up, then releasing, feel like a dyno? Success means reaching the next hold with a dip and a drive (maybe one warm-up bounce), and feeling that your movement caused it.
 
-1. Create the Expo app, add Skia and `expo-sensors`, run on iPhone in Expo Go.
-2. Sensor debug screen: a live graph of sideways and up/down acceleration, to see noise and update rate.
-3. Pendulum: fixed 120 Hz timestep, the Verlet step, drawn as a line and a circle. On-screen sliders for gain (per axis), damping, arm length, filter on/off, curve strength and deadzone.
-4. Hold to hang, release to fly. A second hold with a catch radius, a fall state, a reset button.
+1. ✅ Create the Expo app, add Skia and `expo-sensors`, run on iPhone in Expo Go.
+2. ✅ Sensor debug screen: a live graph of sideways and up/down acceleration, to see noise and update rate.
+3. Climber on the wall: fixed 120 Hz timestep, legs and rope arms, hips follow the phone's movement. Stick figure. Tuning controls. (3a: physics and controls. 3b: deadzone, response curve, haptics.)
+4. Hold to stay on, release to fly. A next hold above with a catch radius, a fall state, a reset button.
 5. Finger drag as a second input (same physics).
 6. Play it and write down the parameter values that felt best.
 
 Then the validation test: play both modes standing, sitting, in bed and as a car passenger; hand it to 3 people with no explanation.
 
-- **Pass:** most build a swing with up-and-down motion within about 30 seconds and enjoy it.
+- **Pass:** most build a bounce with up-and-down motion and reach the next hold within about 30 seconds, and enjoy it.
 - **Fail:** most can't, or clearly prefer touch.
 
 ## Open decisions (ask me, don't decide)
 
-- Camera view: front view (recommended) vs side view vs hybrid. 2D for version 1.
 - Game loop thread: JS thread first vs Reanimated worklets.
 - Move chaining in version 1: paddles only (recommended) vs more.
 - Backend provider: Supabase (recommended) vs Cloudflare Workers with D1 vs AWS.
